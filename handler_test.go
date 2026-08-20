@@ -8,13 +8,24 @@ import (
 	"testing"
 )
 
+func createTestHandler(cfg *Config) (*WebhookHandler, error) {
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	validator, err := NewValidator(cfg.TitlePattern, cfg.TitleCriteriaDesc, cfg.CommentTemplate)
+	if err != nil {
+		return nil, err
+	}
+	return NewWebhookHandler(cfg, client, validator), nil
+}
+
 func TestWebhookHandler_MethodNotAllowed(t *testing.T) {
 	cfg := &Config{
 		OpenProjectURL:    "http://localhost",
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
 	rr := httptest.NewRecorder()
@@ -31,8 +42,10 @@ func TestWebhookHandler_InvalidJSON(t *testing.T) {
 		OpenProjectURL:    "http://localhost",
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader("not json"))
 	rr := httptest.NewRecorder()
@@ -49,8 +62,10 @@ func TestWebhookHandler_MissingAction(t *testing.T) {
 		OpenProjectURL:    "http://localhost",
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	payload := `{}`
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
@@ -68,8 +83,10 @@ func TestWebhookHandler_IgnoresIrrelevantEvent(t *testing.T) {
 		OpenProjectURL:    "http://localhost",
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	payload := `{"action":"project:created"}`
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
@@ -90,8 +107,10 @@ func TestWebhookHandler_ValidTitle(t *testing.T) {
 		OpenProjectURL:    "http://localhost",
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	wp := WorkPackage{
 		ID:      1,
@@ -131,11 +150,13 @@ func TestWebhookHandler_InvalidTitle_PostsComment(t *testing.T) {
 					Raw string `json:"raw"`
 				} `json:"comment"`
 			}
-			json.NewDecoder(r.Body).Decode(&reqBody)
+			if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+				t.Errorf("failed to decode request body: %v", err)
+			}
 			receivedComment = reqBody.Comment.Raw
 
 			w.WriteHeader(http.StatusCreated)
-			w.Write([]byte(`{"_type":"Activity"}`))
+			_, _ = w.Write([]byte(`{"_type":"Activity"}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -146,8 +167,10 @@ func TestWebhookHandler_InvalidTitle_PostsComment(t *testing.T) {
 		OpenProjectURL:    mockOP.URL,
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	wp := WorkPackage{
 		ID:      42,
@@ -186,7 +209,7 @@ func TestWebhookHandler_InvalidTitle_PostsComment(t *testing.T) {
 func TestWebhookHandler_UpdatedEvent(t *testing.T) {
 	mockOP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"_type":"Activity"}`))
+		_, _ = w.Write([]byte(`{"_type":"Activity"}`))
 	}))
 	defer mockOP.Close()
 
@@ -194,8 +217,10 @@ func TestWebhookHandler_UpdatedEvent(t *testing.T) {
 		OpenProjectURL:    mockOP.URL,
 		OpenProjectAPIKey: "test-key",
 	}
-	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
-	handler := NewWebhookHandler(cfg, client)
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
 
 	wp := WorkPackage{
 		ID:      10,

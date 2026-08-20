@@ -25,6 +25,9 @@ func main() {
 
 	log.Printf("[main] port=%s", cfg.Port)
 	log.Printf("[main] openproject_url=%s", cfg.OpenProjectURL)
+	log.Printf("[main] title_pattern=%s", cfg.TitlePattern)
+	log.Printf("[main] title_criteria_desc=%s", cfg.TitleCriteriaDesc)
+	log.Printf("[main] comment_template=%s", cfg.CommentTemplate)
 	if cfg.WebhookSecret != "" {
 		log.Printf("[main] webhook signature verification: enabled")
 	} else {
@@ -34,8 +37,14 @@ func main() {
 	// Initialize OpenProject client.
 	opClient := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
 
+	// Initialize title validator.
+	validator, err := NewValidator(cfg.TitlePattern, cfg.TitleCriteriaDesc, cfg.CommentTemplate)
+	if err != nil {
+		log.Fatalf("[main] validator initialization error: %v", err)
+	}
+
 	// Initialize webhook handler.
-	webhookHandler := NewWebhookHandler(cfg, opClient)
+	webhookHandler := NewWebhookHandler(cfg, opClient, validator)
 
 	// Set up HTTP routes.
 	mux := http.NewServeMux()

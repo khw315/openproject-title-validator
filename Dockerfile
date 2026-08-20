@@ -25,10 +25,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
 # ============================================================
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata
-
-# Create non-root user.
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+# Install packages and create non-root user.
+RUN apk add --no-cache ca-certificates tzdata && \
+    addgroup -S appgroup && \
+    adduser -S appuser -G appgroup
 
 WORKDIR /app
 
