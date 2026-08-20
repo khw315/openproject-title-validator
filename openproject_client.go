@@ -82,6 +82,8 @@ func (c *OpenProjectClient) doPost(url string, payload interface{}) error {
 		return fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Ssl", "on")
 	req.SetBasicAuth("apikey", c.apiKey)
 
 	resp, err := c.httpClient.Do(req)
