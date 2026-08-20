@@ -10,22 +10,26 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // WebhookHandler handles incoming webhook requests from OpenProject
 // and validates work package titles.
 type WebhookHandler struct {
-	config    *Config
-	client    *OpenProjectClient
-	validator *Validator
+	config       *Config
+	client       *OpenProjectClient
+	validator    *Validator
+	mu           sync.RWMutex
+	lastSubjects map[int]string
 }
 
 // NewWebhookHandler creates a new WebhookHandler.
 func NewWebhookHandler(cfg *Config, client *OpenProjectClient, validator *Validator) *WebhookHandler {
 	return &WebhookHandler{
-		config:    cfg,
-		client:    client,
-		validator: validator,
+		config:       cfg,
+		client:       client,
+		validator:    validator,
+		lastSubjects: make(map[int]string),
 	}
 }
 
@@ -94,6 +98,25 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[webhook] work package #%d: %q (author: %s)", wp.ID, wp.Subject, wp.Links.Author.Title)
+
+	// Avoid duplicate comments if the subject has not changed (prevents webhook loop when comment is posted).
+	h.mu.RLock()
+	lastSubject, exists := h.lastSubjects[wp.ID]
+	h.mu.RUnlock()
+
+	if exists && lastSubject == wp.Subject {
+		log.Printf("[webhook] title for WP #%d has not changed, skipping duplicate evaluation", wp.ID)
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"status":"ok","skipped":true,"reason":"title unchanged"}`)
+		return
+	}
+
+	h.mu.Lock()
+	if len(h.lastSubjects) > 10000 {
+		h.lastSubjects = make(map[int]string)
+	}
+	h.lastSubjects[wp.ID] = wp.Subject
+	h.mu.Unlock()
 
 	// Validate the title.
 	valid, violations := h.validator.Validate(wp.Subject)
