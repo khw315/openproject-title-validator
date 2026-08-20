@@ -250,6 +250,70 @@ func TestWebhookHandler_UpdatedEvent(t *testing.T) {
 	}
 }
 
+func TestWebhookHandler_DuplicateUnchangedTitle_SkipsComment(t *testing.T) {
+	postCount := 0
+	mockOP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		postCount++
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"_type":"Activity"}`))
+	}))
+	defer mockOP.Close()
+
+	cfg := &Config{
+		OpenProjectURL:    mockOP.URL,
+		OpenProjectAPIKey: "test-key",
+	}
+	handler, err := createTestHandler(cfg)
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
+
+	wp := WorkPackage{
+		ID:      150,
+		Subject: "Invalid Title Here",
+		Links: WorkPackageLinks{
+			Author: HALLink{Title: "Faisal"},
+		},
+	}
+	wpJSON, _ := json.Marshal(wp)
+
+	payload := map[string]interface{}{
+		"action":       "work_package:created",
+		"work_package": json.RawMessage(wpJSON),
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	// First request: should post comment
+	req1 := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(payloadJSON)))
+	rr1 := httptest.NewRecorder()
+	handler.ServeHTTP(rr1, req1)
+
+	if !strings.Contains(rr1.Body.String(), `"comment_posted":true`) {
+		t.Fatalf("first request should post comment, got: %s", rr1.Body.String())
+	}
+	if postCount != 1 {
+		t.Fatalf("expected 1 post, got %d", postCount)
+	}
+
+	// Second request (e.g. triggered by OpenProject after comment added): same subject -> should skip!
+	payloadUpdate := map[string]interface{}{
+		"action":       "work_package:updated",
+		"work_package": json.RawMessage(wpJSON),
+	}
+	payloadUpdateJSON, _ := json.Marshal(payloadUpdate)
+
+	req2 := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(payloadUpdateJSON)))
+	rr2 := httptest.NewRecorder()
+	handler.ServeHTTP(rr2, req2)
+
+	if !strings.Contains(rr2.Body.String(), `"skipped":true`) {
+		t.Errorf("second request should skip, got: %s", rr2.Body.String())
+	}
+	if postCount != 1 {
+		t.Errorf("postCount should still be 1 (no duplicate post), got %d", postCount)
+	}
+}
+
 func TestHealthHandler(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	rr := httptest.NewRecorder()
