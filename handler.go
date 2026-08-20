@@ -105,7 +105,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mu.RUnlock()
 
 	if exists && lastSubject == wp.Subject {
-		log.Printf("[webhook] title for WP #%d has not changed (%q), skipping duplicate evaluation", wp.ID, wp.Subject)
+		log.Printf("[webhook] title for WP #%d has not changed, skipping duplicate evaluation", wp.ID)
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, `{"status":"ok","skipped":true,"reason":"title unchanged"}`)
 		return
