@@ -1,10 +1,16 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
 func TestValidateTitle_ValidTitles(t *testing.T) {
+	v, err := NewValidator("", "", "")
+	if err != nil {
+		t.Fatalf("failed to create validator: %v", err)
+	}
+
 	tests := []struct {
 		name    string
 		subject string
@@ -33,7 +39,7 @@ func TestValidateTitle_ValidTitles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			valid, violations := ValidateTitle(tt.subject)
+			valid, violations := v.Validate(tt.subject)
 			if !valid {
 				t.Errorf("expected valid title %q, got violations: %v", tt.subject, violations)
 			}
@@ -45,6 +51,11 @@ func TestValidateTitle_ValidTitles(t *testing.T) {
 }
 
 func TestValidateTitle_InvalidTitles(t *testing.T) {
+	v, err := NewValidator("", "", "")
+	if err != nil {
+		t.Fatalf("failed to create validator: %v", err)
+	}
+
 	tests := []struct {
 		name           string
 		subject        string
@@ -124,7 +135,7 @@ func TestValidateTitle_InvalidTitles(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			valid, violations := ValidateTitle(tt.subject)
+			valid, violations := v.Validate(tt.subject)
 			if valid {
 				t.Errorf("expected invalid title %q, but got valid", tt.subject)
 			}
@@ -135,62 +146,118 @@ func TestValidateTitle_InvalidTitles(t *testing.T) {
 	}
 }
 
+func TestValidateTitle_CustomPattern(t *testing.T) {
+	// Custom pattern: [BUG] or [FEATURE] followed by description
+	customPattern := `^\[(BUG|FEATURE)\] .+$`
+	customDesc := `[BUG/FEATURE] Description`
+
+	v, err := NewValidator(customPattern, customDesc, "")
+	if err != nil {
+		t.Fatalf("failed to create custom validator: %v", err)
+	}
+
+	// Valid custom titles
+	validTitles := []string{
+		"[BUG] User cannot login with special characters",
+		"[FEATURE] Export reports to PDF",
+	}
+	for _, title := range validTitles {
+		valid, violations := v.Validate(title)
+		if !valid {
+			t.Errorf("expected valid for %q, got violations: %v", title, violations)
+		}
+	}
+
+	// Invalid custom titles
+	invalidTitles := []string{
+		"[TASK] Fix CSS styling",
+		"Fix login bug",
+		"",
+	}
+	for _, title := range invalidTitles {
+		valid, _ := v.Validate(title)
+		if valid {
+			t.Errorf("expected invalid for %q, got valid", title)
+		}
+	}
+}
+
 func TestBuildCommentMessage(t *testing.T) {
+	v, err := NewValidator("", "", "")
+	if err != nil {
+		t.Fatalf("failed to create validator: %v", err)
+	}
+
 	violations := []string{
 		"NOMOR TEST CASE harus berformat TC-NNN (contoh: TC-001), ditemukan: TC01",
 	}
 
-	message := BuildCommentMessage("Ahmad", violations)
+	message := v.BuildCommentMessage("Ahmad", violations)
 
 	if message == "" {
 		t.Fatal("expected non-empty comment message")
 	}
 
 	// Check that author name is mentioned.
-	if !contains(message, "@Ahmad") {
+	if !strings.Contains(message, "@Ahmad") {
 		t.Error("expected message to contain @Ahmad")
 	}
 
 	// Check that criteria format is mentioned.
-	if !contains(message, "[TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]") {
+	if !strings.Contains(message, "[TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]") {
 		t.Error("expected message to contain criteria format")
 	}
 
 	// Check that violation details are included.
-	if !contains(message, "TC-NNN") {
+	if !strings.Contains(message, "TC-NNN") {
 		t.Error("expected message to contain violation detail about TC-NNN format")
 	}
 }
 
 func TestBuildCommentMessage_MultipleViolations(t *testing.T) {
+	v, err := NewValidator("", "", "")
+	if err != nil {
+		t.Fatalf("failed to create validator: %v", err)
+	}
+
 	violations := []string{
 		"Judul harus memiliki 4 bagian dalam bracket, ditemukan 2",
 		"NOMOR TEST CASE harus berformat TC-NNN (contoh: TC-001), ditemukan: BUG",
 	}
 
-	message := BuildCommentMessage("Siti", violations)
+	message := v.BuildCommentMessage("Siti", violations)
 
-	if !contains(message, "@Siti") {
+	if !strings.Contains(message, "@Siti") {
 		t.Error("expected message to contain @Siti")
 	}
 
-	for _, v := range violations {
-		if !contains(message, v) {
-			t.Errorf("expected message to contain violation: %s", v)
+	for _, violation := range violations {
+		if !strings.Contains(message, violation) {
+			t.Errorf("expected message to contain violation: %s", violation)
 		}
 	}
 }
 
-// contains checks if substr is in s.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+func TestBuildCommentMessage_CustomTemplate(t *testing.T) {
+	template := "Hello {author}! Format must be: {criteria}\n\nList:\n{violations}"
+	v, err := NewValidator("", "[FEATURE] desc", template)
+	if err != nil {
+		t.Fatalf("failed to create validator: %v", err)
 	}
-	return false
+
+	violations := []string{
+		"Missing feature prefix",
+	}
+
+	message := v.BuildCommentMessage("John", violations)
+
+	if !strings.Contains(message, "Hello John!") {
+		t.Errorf("expected message to contain 'Hello John!', got: %s", message)
+	}
+	if !strings.Contains(message, "Format must be: [FEATURE] desc") {
+		t.Errorf("expected message to contain criteria description, got: %s", message)
+	}
+	if !strings.Contains(message, "- Missing feature prefix") {
+		t.Errorf("expected message to contain violation detail, got: %s", message)
+	}
 }

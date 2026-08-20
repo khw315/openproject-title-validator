@@ -11,6 +11,9 @@ func TestLoadConfig_RequiredFields(t *testing.T) {
 	os.Unsetenv("OPENPROJECT_API_KEY")
 	os.Unsetenv("WEBHOOK_SECRET")
 	os.Unsetenv("PORT")
+	os.Unsetenv("TITLE_PATTERN")
+	os.Unsetenv("TITLE_CRITERIA_DESC")
+	os.Unsetenv("COMMENT_TEMPLATE")
 
 	_, err := LoadConfig()
 	if err == nil {
@@ -30,6 +33,15 @@ func TestLoadConfig_RequiredFields(t *testing.T) {
 	}
 	if cfg.Port != "8080" {
 		t.Errorf("expected default port 8080, got %s", cfg.Port)
+	}
+	if cfg.TitlePattern != DefaultTitlePattern {
+		t.Errorf("expected default title pattern, got %s", cfg.TitlePattern)
+	}
+	if cfg.TitleCriteriaDesc != DefaultTitleCriteriaDesc {
+		t.Errorf("expected default title criteria, got %s", cfg.TitleCriteriaDesc)
+	}
+	if cfg.CommentTemplate != DefaultCommentTemplate {
+		t.Errorf("expected default comment template, got %s", cfg.CommentTemplate)
 	}
 }
 
@@ -61,11 +73,17 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	os.Setenv("OPENPROJECT_API_KEY", "my-api-key")
 	os.Setenv("WEBHOOK_SECRET", "my-secret")
 	os.Setenv("PORT", "3000")
+	os.Setenv("TITLE_PATTERN", `^\[PROJ-\d+\] .+$`)
+	os.Setenv("TITLE_CRITERIA_DESC", `[PROJ-123] Description`)
+	os.Setenv("COMMENT_TEMPLATE", `Hi @{author}, please follow {criteria}!`)
 	defer func() {
 		os.Unsetenv("OPENPROJECT_URL")
 		os.Unsetenv("OPENPROJECT_API_KEY")
 		os.Unsetenv("WEBHOOK_SECRET")
 		os.Unsetenv("PORT")
+		os.Unsetenv("TITLE_PATTERN")
+		os.Unsetenv("TITLE_CRITERIA_DESC")
+		os.Unsetenv("COMMENT_TEMPLATE")
 	}()
 
 	cfg, err := LoadConfig()
@@ -84,5 +102,30 @@ func TestLoadConfig_AllFields(t *testing.T) {
 	}
 	if cfg.Port != "3000" {
 		t.Errorf("expected 3000, got %s", cfg.Port)
+	}
+	if cfg.TitlePattern != `^\[PROJ-\d+\] .+$` {
+		t.Errorf("expected custom title pattern, got %s", cfg.TitlePattern)
+	}
+	if cfg.TitleCriteriaDesc != `[PROJ-123] Description` {
+		t.Errorf("expected custom criteria desc, got %s", cfg.TitleCriteriaDesc)
+	}
+	if cfg.CommentTemplate != `Hi @{author}, please follow {criteria}!` {
+		t.Errorf("expected custom comment template, got %s", cfg.CommentTemplate)
+	}
+}
+
+func TestLoadConfig_InvalidRegexPattern(t *testing.T) {
+	os.Setenv("OPENPROJECT_URL", "https://op.example.com")
+	os.Setenv("OPENPROJECT_API_KEY", "my-api-key")
+	os.Setenv("TITLE_PATTERN", `[invalid(regex`)
+	defer func() {
+		os.Unsetenv("OPENPROJECT_URL")
+		os.Unsetenv("OPENPROJECT_API_KEY")
+		os.Unsetenv("TITLE_PATTERN")
+	}()
+
+	_, err := LoadConfig()
+	if err == nil {
+		t.Fatal("expected error on invalid regex pattern, got nil")
 	}
 }

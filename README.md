@@ -11,7 +11,7 @@ A lightweight, automated webhook integration service built in Go that verifies O
 
 ## Title Specification
 
-Every work package subject must strictly match the following 4-segment bracket format:
+By default, every work package subject must strictly match the following 4-segment bracket format:
 
 ```text
 [NOMOR TEST CASE][NAMA FEATURE][SUB FEATURE][PIC TESTER]
@@ -25,6 +25,9 @@ Every work package subject must strictly match the following 4-segment bracket f
 | `[NAMA FEATURE]` | `[Non-empty text]` | Main module or functional area | `[Authentication]` |
 | `[SUB FEATURE]` | `[Non-empty text]` | Specific sub-module, component, or scenario | `[Password Reset Form]` |
 | `[PIC TESTER]` | `[Non-empty text]` | Assigned Quality Assurance / Tester name | `[Ahmad Fais]` |
+
+> [!TIP]
+> The validation criteria, regex pattern, and comment notification template are fully configurable via environment variables (`TITLE_PATTERN`, `TITLE_CRITERIA_DESC`, and `COMMENT_TEMPLATE`).
 
 ### Examples
 
@@ -71,10 +74,13 @@ cp .env.example .env
 
 | Parameter | Required | Default | Description |
 |---|:---:|:---:|---|
-| `OPENPROJECT_URL` | Yes | - | Base URL of the OpenProject instance (e.g., `https://openproject.example.com`) |
+| `OPENPROJECT_URL` | Yes | - | Base URL of the OpenProject instance (e.g., `https://openproject.example.com` or `http://openproject:8080`) |
 | `OPENPROJECT_API_KEY` | Yes | - | API access token for authenticating OpenProject API v3 requests |
 | `WEBHOOK_SECRET` | No | - | Shared secret key for HMAC-SHA1 signature verification |
 | `PORT` | No | `8080` | HTTP port on which the service listens |
+| `TITLE_PATTERN` | No | `^\[TC-\d{3,}\]\[[^\[\]]+\]\[[^\[\]]+\]\[[^\[\]]+\]$` | Custom regex pattern for validating ticket titles |
+| `TITLE_CRITERIA_DESC` | No | `[TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]` | Human-readable criteria description used in comment notifications |
+| `COMMENT_TEMPLATE` | No | `@{author}, judul tiket ini tidak sesuai dengan kriteria **{criteria}**! Harap perbarui judul tiket ini!` | Comment notification template (supports `{author}`, `{criteria}`, `{violations}`) |
 
 > [!TIP]
 > **Generating an OpenProject API Token:**
@@ -89,7 +95,7 @@ cp .env.example .env
 1. In OpenProject, go to **Administration** → **Integrations** → **Webhooks**.
 2. Click **+ Webhook**.
 3. Configure the webhook parameters:
-   - **Payload URL**: `https://your-domain.com/webhook` (or your internal service IP)
+   - **Payload URL**: `http://op-title-validator:8080/webhook` (intra-container) or `https://your-domain.com/webhook`
    - **Events**:
      - `Work packages` → Check **Created**
      - `Work packages` → Check **Updated**
@@ -97,13 +103,15 @@ cp .env.example .env
 4. Click **Save**.
 
 > [!IMPORTANT]
-> Ensure network visibility between OpenProject and the validator service. If running locally with Docker, use a reverse proxy or tunnel (such as ngrok or Cloudflare Tunnel) during testing.
+> When deployed in intra-container mode with Docker Compose, ensure OpenProject and the validator share the same Docker network (`openproject-net`).
 
 ---
 
 ## Deployment
 
-### Option 1: Docker Compose (Recommended)
+### Option 1: Docker Compose (Intra-Container Mode)
+
+The default `docker-compose.yml` is configured for secure intra-container communication on the `openproject-net` bridge network without exposing ports to the host:
 
 ```bash
 # Start service in detached mode
@@ -116,16 +124,16 @@ docker compose logs -f
 ### Option 2: Docker CLI
 
 ```bash
-# Build Docker image
-docker build -t openproject-title-validator .
+# Create shared network if not exists
+docker network create openproject-net
 
-# Run container
+# Run container attached to network
 docker run -d \
   --name op-title-validator \
+  --network openproject-net \
   --restart unless-stopped \
   --env-file .env \
-  -p 8080:8080 \
-  openproject-title-validator
+  ghcr.io/khw315/openproject-title-validator:latest
 ```
 
 ### Option 3: Standalone Binary
@@ -241,7 +249,7 @@ sequenceDiagram
     critical Verify & Parse
         WH->>WH: Verify HMAC-SHA1 signature
         WH->>WH: Filter action (work_package:created / updated)
-        WH->>WH: Evaluate title against regex schema
+        WH->>WH: Evaluate title against configured regex pattern
     end
 
     alt Title Valid
@@ -264,7 +272,7 @@ flowchart TD
     C -->|Invalid| D[401 Unauthorized]
     C -->|Valid / None| E{Action Match?}
     E -->|No| F[200 Ignored]
-    E -->|created / updated| G[Validate Title Regex]
+    E -->|created / updated| G[Validate Configured Regex]
     G -->|Valid| H[200 OK - No Action]
     G -->|Invalid| I[Build Violation Message]
     I --> J[OpenProject Client API]

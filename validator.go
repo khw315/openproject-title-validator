@@ -6,104 +6,179 @@ import (
 	"strings"
 )
 
-// titlePattern matches the required format: [TC-NNN][FEATURE][SUB FEATURE][PIC TESTER]
-// TC number must be at least 3 digits (e.g., TC-001, TC-1234).
-// Each bracket section must contain at least one non-empty character.
-var titlePattern = regexp.MustCompile(`^\[TC-\d{3,}\]\[[^\[\]]+\]\[[^\[\]]+\]\[[^\[\]]+\]$`)
+const (
+	// DefaultTitlePattern matches [TC-NNN][FEATURE][SUB FEATURE][PIC TESTER]
+	DefaultTitlePattern = `^\[TC-\d{3,}\]\[[^\[\]]+\]\[[^\[\]]+\]\[[^\[\]]+\]$`
 
-// tcNumberPattern matches just the TC-NNN portion for specific validation.
-var tcNumberPattern = regexp.MustCompile(`^\[TC-\d{3,}\]`)
+	// DefaultTitleCriteriaDesc is the default human-readable format string.
+	DefaultTitleCriteriaDesc = `[TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]`
 
-// bracketPattern extracts all bracket sections from a title.
-var bracketPattern = regexp.MustCompile(`\[[^\[\]]*\]`)
+	// DefaultCommentTemplate is the default template for comments on invalid work packages.
+	DefaultCommentTemplate = `@{author}, judul tiket ini tidak sesuai dengan kriteria **{criteria}**! Harap perbarui judul tiket ini!`
+)
 
-// ValidateTitle checks whether the given subject matches the required format:
-// [TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]
-//
+var (
+	// bracketPattern extracts all bracket sections from a title.
+	bracketPattern = regexp.MustCompile(`\[[^\[\]]*\]`)
+
+	// tcFormatRegex validates the TC-NNN format within the first bracket.
+	tcFormatRegex = regexp.MustCompile(`^TC-\d{3,}$`)
+
+	// fieldNames maps bracket index to field description.
+	fieldNames = [4]string{"NOMOR TEST CASE", "NAMA FEATURE", "SUB FEATURE", "PIC TESTER"}
+)
+
+// Validator validates work package titles against a regex pattern and criteria description.
+type Validator struct {
+	pattern         *regexp.Regexp
+	criteriaDesc    string
+	commentTemplate string
+}
+
+// NewValidator creates a new Validator with the given pattern, criteria description, and comment template.
+func NewValidator(patternStr, criteriaDesc, commentTemplate string) (*Validator, error) {
+	if patternStr == "" {
+		patternStr = DefaultTitlePattern
+	}
+	if criteriaDesc == "" {
+		criteriaDesc = DefaultTitleCriteriaDesc
+	}
+	if commentTemplate == "" {
+		commentTemplate = DefaultCommentTemplate
+	}
+
+	re, err := regexp.Compile(patternStr)
+	if err != nil {
+		return nil, fmt.Errorf("compile regex pattern %q: %w", patternStr, err)
+	}
+
+	// Support literal \n escaped sequences in template
+	commentTemplate = strings.ReplaceAll(commentTemplate, `\n`, "\n")
+
+	return &Validator{
+		pattern:         re,
+		criteriaDesc:    criteriaDesc,
+		commentTemplate: commentTemplate,
+	}, nil
+}
+
+// Validate checks whether the given subject matches the configured regex pattern.
 // Returns true if valid, or false with a list of violation descriptions.
-func ValidateTitle(subject string) (bool, []string) {
+func (v *Validator) Validate(subject string) (bool, []string) {
 	subject = strings.TrimSpace(subject)
 
 	if subject == "" {
 		return false, []string{"Judul tiket kosong"}
 	}
 
-	// Check if it matches the full pattern.
-	if titlePattern.MatchString(subject) {
+	// Check if it matches the configured pattern.
+	if v.pattern.MatchString(subject) {
 		return true, nil
 	}
 
-	// Provide specific violation messages.
-	var violations []string
-
-	// Extract all bracket sections.
-	brackets := bracketPattern.FindAllString(subject, -1)
-
-	if len(brackets) == 0 {
-		violations = append(violations, "Judul tidak mengikuti format [TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]")
-		return false, violations
+	// If using the default 4-bracket format, provide detailed structural error messages.
+	if v.pattern.String() == DefaultTitlePattern {
+		return false, v.validateDefaultBreakdown(subject)
 	}
 
-	if len(brackets) < 4 {
+	// For custom patterns, provide general violation message.
+	return false, []string{fmt.Sprintf("Judul tidak memenuhi kriteria format: %s", v.criteriaDesc)}
+}
+
+// validateDefaultBreakdown coordinates structural checks for the standard [TC-NNN][...][...][...] format.
+func (v *Validator) validateDefaultBreakdown(subject string) []string {
+	brackets := bracketPattern.FindAllString(subject, -1)
+	if len(brackets) == 0 {
+		return []string{"Judul tidak mengikuti format [TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]"}
+	}
+
+	var violations []string
+	violations = append(violations, checkBracketCount(brackets, subject)...)
+	violations = append(violations, checkTestCaseFormat(brackets[0])...)
+	violations = append(violations, checkEmptyFields(brackets)...)
+	violations = append(violations, checkExtraText(brackets, subject)...)
+
+	if len(violations) == 0 {
+		return []string{"Judul tidak mengikuti format [TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]"}
+	}
+
+	return violations
+}
+
+// checkBracketCount validates the number of brackets and prefix.
+func checkBracketCount(brackets []string, subject string) []string {
+	var violations []string
+
+	if len(brackets) != 4 {
 		violations = append(violations, fmt.Sprintf("Judul harus memiliki 4 bagian dalam bracket, ditemukan %d", len(brackets)))
 	}
 
-	if len(brackets) > 4 {
-		violations = append(violations, fmt.Sprintf("Judul harus memiliki tepat 4 bagian dalam bracket, ditemukan %d", len(brackets)))
-	}
-
-	// Check if title starts with the first bracket.
 	if !strings.HasPrefix(subject, "[") {
 		violations = append(violations, "Judul harus dimulai dengan bracket [TC-NNN]")
 	}
 
-	// Check TC number format in the first bracket.
-	if len(brackets) >= 1 {
-		first := brackets[0]
-		tcContent := first[1 : len(first)-1] // Remove surrounding brackets.
-		if !regexp.MustCompile(`^TC-\d{3,}$`).MatchString(tcContent) {
-			violations = append(violations, fmt.Sprintf("NOMOR TEST CASE harus berformat TC-NNN (contoh: TC-001), ditemukan: %s", tcContent))
-		}
-	}
+	return violations
+}
 
-	// Check for empty brackets.
-	fieldNames := []string{"NOMOR TEST CASE", "NAMA FEATURE", "SUB FEATURE", "PIC TESTER"}
-	for i, bracket := range brackets {
-		if i >= 4 {
-			break
-		}
-		content := bracket[1 : len(bracket)-1] // Remove surrounding brackets.
+// checkTestCaseFormat validates that the first bracket contains a valid TC-NNN identifier.
+func checkTestCaseFormat(firstBracket string) []string {
+	tcContent := firstBracket[1 : len(firstBracket)-1]
+	if !tcFormatRegex.MatchString(tcContent) {
+		return []string{fmt.Sprintf("NOMOR TEST CASE harus berformat TC-NNN (contoh: TC-001), ditemukan: %s", tcContent)}
+	}
+	return nil
+}
+
+// checkEmptyFields checks that none of the 4 required brackets are empty.
+func checkEmptyFields(brackets []string) []string {
+	var violations []string
+	limit := min(len(brackets), 4)
+
+	for i := 0; i < limit; i++ {
+		content := brackets[i][1 : len(brackets[i])-1]
 		if strings.TrimSpace(content) == "" {
 			violations = append(violations, fmt.Sprintf("%s tidak boleh kosong", fieldNames[i]))
 		}
 	}
 
-	// Check for extra text after brackets.
-	if len(brackets) >= 4 {
-		reconstructed := strings.Join(brackets[:4], "")
-		if subject != reconstructed {
-			violations = append(violations, "Judul tidak boleh memiliki teks tambahan di luar bracket")
-		}
+	return violations
+}
+
+// checkExtraText checks if there are trailing characters outside the 4 brackets.
+func checkExtraText(brackets []string, subject string) []string {
+	if len(brackets) < 4 {
+		return nil
 	}
 
-	if len(violations) == 0 {
-		violations = append(violations, "Judul tidak mengikuti format [TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]")
+	reconstructed := strings.Join(brackets[:4], "")
+	if subject != reconstructed {
+		return []string{"Judul tidak boleh memiliki teks tambahan di luar bracket"}
 	}
 
-	return false, violations
+	return nil
 }
 
 // BuildCommentMessage creates the comment message to post on an invalid work package.
-func BuildCommentMessage(authorName string, violations []string) string {
-	criteria := "[TC-NNN][NAMA FEATURE][SUB FEATURE][PIC TESTER]"
+func (v *Validator) BuildCommentMessage(authorName string, violations []string) string {
+	msg := strings.ReplaceAll(v.commentTemplate, "{author}", authorName)
+	msg = strings.ReplaceAll(msg, "{criteria}", v.criteriaDesc)
+
+	if strings.Contains(msg, "{violations}") {
+		var violationDetails strings.Builder
+		for _, violation := range violations {
+			violationDetails.WriteString(fmt.Sprintf("- %s\n", violation))
+		}
+		return strings.ReplaceAll(msg, "{violations}", strings.TrimRight(violationDetails.String(), "\n"))
+	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("@%s, judul tiket ini tidak sesuai dengan kriteria **%s**! Harap perbarui judul tiket ini!\n\n", authorName, criteria))
+	b.WriteString(msg)
+	b.WriteString("\n\n")
 
 	if len(violations) > 0 {
 		b.WriteString("**Detail pelanggaran:**\n")
-		for _, v := range violations {
-			b.WriteString(fmt.Sprintf("- %s\n", v))
+		for _, violation := range violations {
+			b.WriteString(fmt.Sprintf("- %s\n", violation))
 		}
 	}
 

@@ -15,15 +15,17 @@ import (
 // WebhookHandler handles incoming webhook requests from OpenProject
 // and validates work package titles.
 type WebhookHandler struct {
-	config *Config
-	client *OpenProjectClient
+	config    *Config
+	client    *OpenProjectClient
+	validator *Validator
 }
 
 // NewWebhookHandler creates a new WebhookHandler.
-func NewWebhookHandler(cfg *Config, client *OpenProjectClient) *WebhookHandler {
+func NewWebhookHandler(cfg *Config, client *OpenProjectClient, validator *Validator) *WebhookHandler {
 	return &WebhookHandler{
-		config: cfg,
-		client: client,
+		config:    cfg,
+		client:    client,
+		validator: validator,
 	}
 }
 
@@ -94,7 +96,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[webhook] work package #%d: %q (author: %s)", wp.ID, wp.Subject, wp.Links.Author.Title)
 
 	// Validate the title.
-	valid, violations := ValidateTitle(wp.Subject)
+	valid, violations := h.validator.Validate(wp.Subject)
 	if valid {
 		log.Printf("[webhook] title is valid for WP #%d", wp.ID)
 		w.WriteHeader(http.StatusOK)
@@ -109,7 +111,7 @@ func (h *WebhookHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if authorName == "" {
 		authorName = "Pengguna"
 	}
-	comment := BuildCommentMessage(authorName, violations)
+	comment := h.validator.BuildCommentMessage(authorName, violations)
 
 	// Post the comment to OpenProject.
 	if err := h.client.PostComment(wp.ID, comment); err != nil {
