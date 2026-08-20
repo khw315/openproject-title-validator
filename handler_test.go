@@ -1,0 +1,240 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestWebhookHandler_MethodNotAllowed(t *testing.T) {
+	cfg := &Config{
+		OpenProjectURL:    "http://localhost",
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	req := httptest.NewRequest(http.MethodGet, "/webhook", nil)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected status %d, got %d", http.StatusMethodNotAllowed, rr.Code)
+	}
+}
+
+func TestWebhookHandler_InvalidJSON(t *testing.T) {
+	cfg := &Config{
+		OpenProjectURL:    "http://localhost",
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader("not json"))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d", http.StatusBadRequest, rr.Code)
+	}
+}
+
+func TestWebhookHandler_MissingAction(t *testing.T) {
+	cfg := &Config{
+		OpenProjectURL:    "http://localhost",
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	payload := `{}`
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d", http.StatusBadRequest, rr.Code)
+	}
+}
+
+func TestWebhookHandler_IgnoresIrrelevantEvent(t *testing.T) {
+	cfg := &Config{
+		OpenProjectURL:    "http://localhost",
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	payload := `{"action":"project:created"}`
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "ignored") {
+		t.Errorf("expected 'ignored' in response body, got: %s", rr.Body.String())
+	}
+}
+
+func TestWebhookHandler_ValidTitle(t *testing.T) {
+	cfg := &Config{
+		OpenProjectURL:    "http://localhost",
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	wp := WorkPackage{
+		ID:      1,
+		Subject: "[TC-001][Login][Form Validation][Ahmad]",
+		Links: WorkPackageLinks{
+			Author: HALLink{Title: "Ahmad"},
+		},
+	}
+	wpJSON, _ := json.Marshal(wp)
+
+	payload := map[string]interface{}{
+		"action":       "work_package:created",
+		"work_package": json.RawMessage(wpJSON),
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(payloadJSON)))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"valid":true`) {
+		t.Errorf("expected valid:true in response, got: %s", rr.Body.String())
+	}
+}
+
+func TestWebhookHandler_InvalidTitle_PostsComment(t *testing.T) {
+	// Set up a mock OpenProject API server.
+	var receivedComment string
+	mockOP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/activities") {
+			var reqBody struct {
+				Comment struct {
+					Raw string `json:"raw"`
+				} `json:"comment"`
+			}
+			json.NewDecoder(r.Body).Decode(&reqBody)
+			receivedComment = reqBody.Comment.Raw
+
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"_type":"Activity"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer mockOP.Close()
+
+	cfg := &Config{
+		OpenProjectURL:    mockOP.URL,
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	wp := WorkPackage{
+		ID:      42,
+		Subject: "Fix login bug",
+		Links: WorkPackageLinks{
+			Author: HALLink{Title: "Budi"},
+		},
+	}
+	wpJSON, _ := json.Marshal(wp)
+
+	payload := map[string]interface{}{
+		"action":       "work_package:created",
+		"work_package": json.RawMessage(wpJSON),
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(payloadJSON)))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"comment_posted":true`) {
+		t.Errorf("expected comment_posted:true in response, got: %s", rr.Body.String())
+	}
+	if receivedComment == "" {
+		t.Error("expected comment to be posted to OpenProject, but none received")
+	}
+	if !strings.Contains(receivedComment, "@Budi") {
+		t.Errorf("expected comment to mention @Budi, got: %s", receivedComment)
+	}
+}
+
+func TestWebhookHandler_UpdatedEvent(t *testing.T) {
+	mockOP := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"_type":"Activity"}`))
+	}))
+	defer mockOP.Close()
+
+	cfg := &Config{
+		OpenProjectURL:    mockOP.URL,
+		OpenProjectAPIKey: "test-key",
+	}
+	client := NewOpenProjectClient(cfg.OpenProjectURL, cfg.OpenProjectAPIKey)
+	handler := NewWebhookHandler(cfg, client)
+
+	wp := WorkPackage{
+		ID:      10,
+		Subject: "Bad title",
+		Links: WorkPackageLinks{
+			Author: HALLink{Title: "Siti"},
+		},
+	}
+	wpJSON, _ := json.Marshal(wp)
+
+	payload := map[string]interface{}{
+		"action":       "work_package:updated",
+		"work_package": json.RawMessage(wpJSON),
+	}
+	payloadJSON, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(string(payloadJSON)))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"comment_posted":true`) {
+		t.Errorf("expected comment_posted:true for updated event, got: %s", rr.Body.String())
+	}
+}
+
+func TestHealthHandler(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rr := httptest.NewRecorder()
+
+	HealthHandler(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), "healthy") {
+		t.Errorf("expected 'healthy' in response, got: %s", rr.Body.String())
+	}
+}
