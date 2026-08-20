@@ -28,9 +28,11 @@ func TestPostComment_Success(t *testing.T) {
 			t.Errorf("expected Content-Type application/json, got %s", ct)
 		}
 
-		json.NewDecoder(r.Body).Decode(&receivedBody)
+		if err := json.NewDecoder(r.Body).Decode(&receivedBody); err != nil {
+			t.Errorf("failed to decode body: %v", err)
+		}
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"_type":"Activity","id":1}`))
+		_, _ = w.Write([]byte(`{"_type":"Activity","id":1}`))
 	}))
 	defer server.Close()
 
@@ -67,7 +69,7 @@ func TestPostComment_ServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"_type":"Error","message":"Internal Server Error"}`))
+		_, _ = w.Write([]byte(`{"_type":"Error","message":"Internal Server Error"}`))
 	}))
 	defer server.Close()
 
@@ -91,11 +93,11 @@ func TestPostComment_RetrySuccess(t *testing.T) {
 		attempts++
 		if attempts == 1 {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"_type":"Error","message":"Service Unavailable"}`))
+			_, _ = w.Write([]byte(`{"_type":"Error","message":"Service Unavailable"}`))
 			return
 		}
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"_type":"Activity","id":1}`))
+		_, _ = w.Write([]byte(`{"_type":"Activity","id":1}`))
 	}))
 	defer server.Close()
 
