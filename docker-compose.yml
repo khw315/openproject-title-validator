@@ -1,10 +1,12 @@
 services:
   webhook:
-    build: .
+    image: ghcr.io/khw315/openproject-title-validator:latest
     container_name: op-title-validator
     restart: unless-stopped
-    ports:
-      - "${PORT:-8080}:8080"
+    expose:
+      - "8080"
+    networks:
+      - openproject-net
     env_file:
       - .env
     environment:
@@ -15,3 +17,8 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+
+networks:
+  openproject-net:
+    name: openproject-net
+    driver: bridge
